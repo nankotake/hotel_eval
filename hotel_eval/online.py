@@ -39,6 +39,7 @@ def run_full_layer(
     issues += consistency.check_factual(fact_db, claims)
     issues += safety.check_safety_rules(out.raw)
     issues += relevance.check_relevance_rules(inp, out)
+    issues += relevance.check_audience_fit(inp, out)
     return issues
 
 

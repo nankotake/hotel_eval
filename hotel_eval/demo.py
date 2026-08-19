@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from . import judge, online, prompts, report
+from . import judge, online, prompts, relevance, report
 from .extractor import parse_llm_output
 from .schema import Claim, HotelFact, HotelInput
 
@@ -48,48 +48,58 @@ RAW_OUTPUT = """需求理解完成
 
 INPUT = HotelInput(
     hotels=[
+        "宿适精选酒店（上海虹桥国展中心店）",
+        "上海埕前假日酒店（大场镇地铁站店）",
         "季朵酒店（上海国际旅游度假区店）",
-        "上海煜前假日酒店（大场镇地铁站店）",
-        "季朵酒店（上海虹桥商务中心店）",
     ],
     date="2026-08-19",
-    guests=2,
+    guests=1,  # 需求说"独自"
+    nights=1,
 )
 
 FACT_DB = {
+    "宿适精选酒店（上海虹桥国展中心店）": HotelFact(
+        name="宿适精选酒店（上海虹桥国展中心店）",
+        region="青浦区", star="舒适型", price=153, score=4.2,
+        facilities=["临洮路地铁站步行可达", "周边餐饮丰富"],
+    ),
+    "上海埕前假日酒店（大场镇地铁站店）": HotelFact(
+        name="上海埕前假日酒店（大场镇地铁站店）",
+        region="宝山区", star="经济型", price=184, score=4.6,
+        facilities=["独立洗衣机", "一次性干巾"],
+    ),
     "季朵酒店（上海国际旅游度假区店）": HotelFact(
         name="季朵酒店（上海国际旅游度假区店）",
-        region="浦东新区", star="经济型", price=202, score=5.0,
-        facilities=["迪士尼接驳", "班车"],
-    ),
-    "上海煜前假日酒店（大场镇地铁站店）": HotelFact(
-        name="上海煜前假日酒店（大场镇地铁站店）",
-        region="宝山区", star="经济型", price=184, score=4.6,
-        facilities=["独立卫浴", "一次性毛巾"],
-    ),
-    "季朵酒店（上海虹桥商务中心店）": HotelFact(
-        name="季朵酒店（上海虹桥商务中心店）",
-        region="长宁区", star="舒适型", price=260, score=4.3,
-        facilities=["距虹桥机场近", "含早餐"],
+        region="浦东新区", star="舒适型", price=202, score=5.0,
+        facilities=["迪士尼接驳", "川沙地铁站送站", "投影设备"],
     ),
 }
 
 # 事实声称：结构化部分（方案/对比表）可靠抽取；自由文本里的声称手工补（生产里由系统结构化输出或抽取模型负责）
 CLAIMS = [
-    Claim(hotel="季朵酒店（上海国际旅游度假区店）", attribute="price", value=202, source="方案1"),
-    Claim(hotel="上海煜前假日酒店（大场镇地铁站店）", attribute="price", value=184, source="方案2"),
+    Claim(hotel="宿适精选酒店（上海虹桥国展中心店）", attribute="price", value=153, source="分析段"),
+    Claim(hotel="上海埕前假日酒店（大场镇地铁站店）", attribute="price", value=184, source="方案二"),
+    Claim(hotel="季朵酒店（上海国际旅游度假区店）", attribute="price", value=202, source="方案一"),
+    Claim(hotel="宿适精选酒店（上海虹桥国展中心店）", attribute="score", value=4.2, source="对比表"),
+    Claim(hotel="上海埕前假日酒店（大场镇地铁站店）", attribute="score", value=4.6, source="对比表"),
     Claim(hotel="季朵酒店（上海国际旅游度假区店）", attribute="score", value=5.0, source="对比表"),
-    Claim(hotel="上海煜前假日酒店（大场镇地铁站店）", attribute="score", value=4.6, source="对比表"),
-    Claim(hotel="季朵酒店（上海虹桥商务中心店）", attribute="facility", value="300家餐厅", source="分析段"),
+    Claim(hotel="宿适精选酒店（上海虹桥国展中心店）", attribute="facility", value="300家餐厅", source="分析段"),
 ]
 
 
 def _judge_payloads(out) -> dict:
     reasons = "\n".join(r for h in out.results for r in h.reasons)
+    profile = relevance.extract_user_profile(out.requirement_text)
+    audience = relevance.extract_audience_signals((out.analysis_text or "") + "\n" + reasons)
     return {
         "语义": {"text": reasons or out.raw},
-        "相关性": {"input": {"hotels": INPUT.hotels, "date": INPUT.date, "guests": INPUT.guests},
-                    "results": [r.name for r in out.results]},
+        "相关性": {
+            "input": {"hotels": INPUT.hotels, "date": INPUT.date, "guests": INPUT.guests},
+            "user_profile": profile,
+            "results": [r.name for r in out.results],
+            "reasons_audience": audience,
+            "reasons": reasons,
+        },
         "安全性": {"text": out.raw},
         "权衡质量": {"input": INPUT.hotels, "results": [r.name for r in out.results],
                       "reasons": reasons},

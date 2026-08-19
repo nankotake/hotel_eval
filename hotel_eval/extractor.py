@@ -3,8 +3,7 @@
 说明：
   - 生产系统里，最好让被测系统直接输出结构化 JSON，本模块的 parse 只做"校验 + 归一化"。
   - 这里提供一套针对"文本渲染输出"的正则解析，作为 demo 级实现，用于跑通评测链路。
-  - 从自由文本里抽取"任意事实声称"本身是 NLP 问题，此处对结构化部分（方案/对比表/日期）可靠抽取，
-    自由文本里的声称由调用方补充（见 demo.py 的 analysis_claims）。
+  - 所有跨段/跨库的酒店名匹配都用 normalize_name()，容忍粘贴时的空格/全半角括号差异。
 """
 
 from __future__ import annotations
@@ -12,13 +11,15 @@ from __future__ import annotations
 import re
 from typing import List
 
-from .schema import HotelInput, LLMOutput, RecommendedHotel
+from .schema import HotelInput, LLMOutput, RecommendedHotel, normalize_name
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日")
 _GUESTS_RE = re.compile(r"(\d+)\s*(?:人|位|名)(?!晚|星|元|家|间)")
 _STAR_RE = re.compile(r"(五星|四星|三星|经济型|舒适型|豪华型)")
+_LEVEL_RE = re.compile(r"(舒适型|经济型|豪华型|五星|四星|三星)\s*$")
 _REGION_RE = re.compile(r"(徐汇区|浦东新区|宝山区|静安区|黄浦区|长宁区|杨浦区|虹口区|闵行区|松江区|嘉定区|青浦区|奉贤区|金山区)")
-_PRICE_RE = re.compile(r"¥?(\d+)\s*元起")
+_PRICE_RE = re.compile(r"[¥￥]?\s*(\d+)\s*元?起")
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
 def extract_dates(text: str) -> List[str]:
@@ -28,26 +29,34 @@ def extract_dates(text: str) -> List[str]:
 def extract_requirement(text: str) -> dict:
     """从需求理解段抽取 星级/区域/人数（尽力而为）。"""
     seg = _segment(text, "需求理解")
+    guests = _int(_match_first(_GUESTS_RE, seg))
+    if guests is None and re.search(r"独自|单独|一人|1人", seg):
+        guests = 1
     return {
-        "requirement_star": (_match_first(_STAR_RE, seg)),
-        "requirement_region": (_match_first(_REGION_RE, seg)),
-        "requirement_guests": (_int(_match_first(_GUESTS_RE, seg))),
+        "requirement_star": _match_first(_STAR_RE, seg) or None,
+        "requirement_region": _match_first(_REGION_RE, seg) or None,
+        "requirement_guests": guests,
     }
+
+
+def extract_requirement_hotels(text: str, input_hotels: List[str]) -> List[str]:
+    """需求段回显了哪些输入酒店（归一化子串匹配）。"""
+    seg_norm = normalize_name(_segment(text, "需求理解"))
+    return [h for h in input_hotels if normalize_name(h) in seg_norm]
 
 
 def extract_analysis_hotels(text: str, input_hotels: List[str]) -> List[str]:
     """分析段里提及的、且能匹配到候选列表的酒店名。"""
-    seg = _segment(text, "酒店分析定位")
-    return [h for h in input_hotels if h[:6] in seg or h in seg]
+    seg_norm = normalize_name(_segment(text, "酒店分析"))
+    return [h for h in input_hotels if normalize_name(h) in seg_norm]
 
 
 def extract_results(text: str) -> List[RecommendedHotel]:
-    """抽取 方案1/方案2 块：酒店名、档次、价格、理由。"""
+    """抽取 方案一/二 块：酒店名、档次、价格、星级、理由。"""
     results: List[RecommendedHotel] = []
-    blocks = re.split(r"方案(\d+)\s*[·|｜]?\s*[^\n]*", text)
-    # 上面 split 会交替产出 [前置, 序号1, 内容1, 序号2, 内容2, ...]
+    blocks = re.split(r"方案\s*([一二三四五六七八九十\d]+)\s*[·|｜]?\s*[^\n]*", text)
     for i in range(1, len(blocks), 2):
-        rank = int(blocks[i])
+        rank = _cn_num(blocks[i])
         body = blocks[i + 1] if i + 1 < len(blocks) else ""
         name = _first_hotel_name(body)
         if not name:
@@ -56,27 +65,23 @@ def extract_results(text: str) -> List[RecommendedHotel]:
             RecommendedHotel(
                 rank=rank,
                 name=name,
-                star_text=_match_first(r"[★☆]{3,}", body) or "",
+                star_text=_match_first(r"[★☆*]{3,}", body),
                 level_text=_match_first(_STAR_RE, body) or "",
                 price_text=_match_first(_PRICE_RE, body) or "",
-                reasons=[ln.strip("- •　") for ln in body.splitlines() if ln.strip().startswith(("-", "•"))],
+                reasons=_extract_reasons(body),
             )
         )
     return results
 
 
 def extract_table(text: str) -> List[dict]:
-    """抽取 markdown 对比表行（酒店/评分/价格/星级）。"""
+    """抽取 markdown 对比表行（尽力而为）。"""
     rows: List[dict] = []
-    in_table = False
     for line in text.splitlines():
         if "|" not in line:
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if not cells or cells[0] in ("酒店",) or set("".join(cells)) <= set("-| "):
-            continue
-        # 第一列是"酒店"或"推荐指数"等标签行跳过；数据行第一列是酒店名或指标名
-        if cells[0] in ("推荐指数", "价格", "位置", "评分", "亮点"):
+        if not cells or set("".join(cells)) <= set("-| "):
             continue
         rows.append(cells)
     return rows
@@ -84,11 +89,14 @@ def extract_table(text: str) -> List[dict]:
 
 def parse_llm_output(raw: str, input_hotels: List[str]) -> LLMOutput:
     out = LLMOutput(raw=raw)
+    out.requirement_text = _segment(raw, "需求理解")
+    out.analysis_text = _segment(raw, "酒店分析")
     out.dates = extract_dates(raw)
     req = extract_requirement(raw)
     out.requirement_star = req["requirement_star"]
     out.requirement_region = req["requirement_region"]
     out.requirement_guests = req["requirement_guests"]
+    out.requirement_hotels = extract_requirement_hotels(raw, input_hotels)
     out.analysis_hotels = extract_analysis_hotels(raw, input_hotels)
     out.results = extract_results(raw)
     out.table = extract_table(raw)
@@ -101,7 +109,7 @@ def parse_llm_output(raw: str, input_hotels: List[str]) -> LLMOutput:
 
 def _segment(text: str, keyword: str) -> str:
     """截取从 keyword 到下一个已知段落标题之间的文本。"""
-    headers = ["需求理解", "酒店分析定位", "根据你的偏好", "全部酒店对比", "方案"]
+    headers = ["需求理解", "酒店分析", "根据你的偏好", "全部酒店对比", "方案"]
     idx = text.find(keyword)
     if idx < 0:
         return ""
@@ -128,10 +136,29 @@ def _int(s: str):
     return int(s) if s else None
 
 
+def _cn_num(s: str) -> int:
+    s = s.strip()
+    if s in _CN_NUM:
+        return _CN_NUM[s]
+    return int(s) if s.isdigit() else 0
+
+
 def _first_hotel_name(body: str) -> str:
-    """从方案块里取第一行含"酒店"的名字。"""
+    """从方案块里取酒店名（去掉行尾档次词）。"""
     for line in body.splitlines():
         line = line.strip()
-        if "酒店" in line and len(line) < 40:
-            return line
+        if "酒店" in line and "综合推荐指数" not in line:
+            line = _LEVEL_RE.sub("", line).strip()
+            if line and len(line) < 40:
+                return line
     return ""
+
+
+def _extract_reasons(body: str) -> List[str]:
+    """方案块里含'：'的理由行。"""
+    reasons: List[str] = []
+    for line in body.splitlines():
+        s = line.strip().strip("-•·　 ")
+        if "：" in s and "综合推荐指数" not in s and "方案" not in s:
+            reasons.append(s)
+    return reasons

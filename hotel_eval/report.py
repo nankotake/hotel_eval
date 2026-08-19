@@ -10,7 +10,11 @@ from typing import Dict, List
 from .schema import HotelInput, Issue, LLMOutput
 
 _LAYER_ORDER = ["gate", "safety", "quality"]
-_LAYER_LABEL = {"gate": "硬门禁（一致性·回显/自洽/事实）", "safety": "安全层", "quality": "质量层（语义/相关性 judge）"}
+_LAYER_LABEL = {
+    "gate": "硬门禁（一致性·回显/自洽/事实）",
+    "safety": "安全层",
+    "quality": "软性层（需人工确认 / judge）",
+}
 
 
 def render(issues: List[Issue], judge_results: Dict[str, dict], inp: HotelInput, out: LLMOutput) -> None:
