@@ -42,6 +42,13 @@ def extract_audience_signals(text: str) -> List[str]:
     return [k for k, pats in AUDIENCE.items() if any(p in text for p in pats)]
 
 
+def audience_mismatch(profile: List[str], audience: List[str]) -> List[str]:
+    """受众信号里与画像不匹配的标签；画像为空时不判（返回空）。"""
+    if not profile:
+        return []
+    return [a for a in audience if a not in profile]
+
+
 def _audience_text(out: LLMOutput) -> str:
     """受众信号的来源 = 分析段 + 方案理由（LLM 对'酒店适合谁'的表述）。"""
     reasons = "\n".join(r for h in out.results for r in h.reasons)
@@ -75,14 +82,13 @@ def check_audience_fit(inp: HotelInput, out: LLMOutput) -> List[Issue]:
     audience = extract_audience_signals(_audience_text(out))
 
     issues: List[Issue] = []
-    if profile and audience:
-        mismatch = [a for a in audience if a not in profile]
-        if mismatch:
-            issues.append(Issue(
-                dimension=DIM, check="相关·受众匹配", layer="quality", passed=False,
-                detail=f"需求画像={profile}，推荐理由主打受众={mismatch}（可能情境错位，建议 judge 深评）",
-                evidence=f"profile={profile} audience={audience}",
-            ))
+    mismatch = audience_mismatch(profile, audience)
+    if mismatch:
+        issues.append(Issue(
+            dimension=DIM, check="相关·受众匹配", layer="quality", passed=False,
+            detail=f"需求画像={profile}，推荐理由主打受众={mismatch}（可能情境错位，建议 judge 深评）",
+            evidence=f"profile={profile} audience={audience}",
+        ))
     return issues
 
 

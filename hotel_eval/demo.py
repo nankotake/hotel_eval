@@ -106,6 +106,40 @@ def _judge_payloads(out) -> dict:
     }
 
 
+def run_audience_selfcheck() -> None:
+    """验证画像/受众词典扩展到情侣/商务后不漏报、不误报。"""
+    cases = [
+        # (标签, 画像文本, 受众文本, 预期画像, 预期错位)
+        ("亲子·匹配", "带孩子去迪士尼，两大一小", "适合亲子家庭，有儿童乐园", ["亲子家庭"], []),
+        ("情侣·匹配", "情侣出游，想要蜜月氛围", "浪漫情侣房，适合蜜月情侣", ["情侣出行"], []),
+        ("商务·匹配", "商务出差，要在会展中心开会", "商务首选，近会展中心有会议室", ["商务出差"], []),
+        ("独自→亲子", "独自出行，一个人住一晚", "特别适合亲子家庭和迪士尼游客", ["独自出行"], ["亲子家庭"]),
+        ("商务→亲子", "商务出差开会", "适合亲子家庭带娃入住", ["商务出差"], ["亲子家庭"]),
+        ("情侣→商务", "情侣蜜月旅行", "商务出差首选，会议室齐全", ["情侣出行"], ["商务出差"]),
+        ("无画像跳过", "帮我找一家上海的酒店住一晚", "适合亲子家庭", [], []),
+    ]
+    print()
+    print("=" * 72)
+    print("受众匹配自检（扩展标签：情侣/商务等，验证不漏报不误报）")
+    print("=" * 72)
+    all_ok = True
+    for label, ptext, atext, exp_profile, exp_mismatch in cases:
+        profile = relevance.extract_user_profile(ptext)
+        audience = relevance.extract_audience_signals(atext)
+        mismatch = relevance.audience_mismatch(profile, audience)
+        ok = (profile == exp_profile) and (mismatch == exp_mismatch)
+        all_ok = all_ok and ok
+        mark = "✓" if ok else "✗"
+        print(f"[{mark}] {label}")
+        print(f"    画像文本: {ptext}")
+        print(f"    受众文本: {atext}")
+        print(f"    画像={profile}  受众={audience}  错位={mismatch}")
+        if not ok:
+            print(f"    !!! 预期 画像={exp_profile} 错位={exp_mismatch}")
+        print()
+    print("自检结论:", "全部通过 ✓" if all_ok else "存在不一致 ✗")
+
+
 def main() -> None:
     out = parse_llm_output(RAW_OUTPUT, INPUT.hotels)
 
@@ -144,6 +178,9 @@ def main() -> None:
         online.OnlineRecord("g", 3.5, booked=0),
     ]
     print(online.compute_calibration(demo_records))
+
+    # 6) 受众匹配词典自检
+    run_audience_selfcheck()
 
 
 if __name__ == "__main__":
