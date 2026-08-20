@@ -22,14 +22,32 @@ def normalize_name(s: str) -> str:
 
 @dataclass
 class HotelInput:
-    """被测系统的输入（用户实际只给了：酒店列表、入住日期、人数）。"""
+    """用户输入（入参）—— 被测 LLM 收到的请求。
 
-    hotels: List[str]
-    date: str  # 入住日期
-    guests: int
-    nights: int = 1  # 晚数
-    region: Optional[str] = None  # 若话术里明确提到区域偏好，可填
+    产品交互：用户在酒店列表里勾选若干酒店用于对比，没有自由文本输入。
+    入参 = 选择的酒店 + 入住条件（天数/日期/人数），可选区域/预算。
+    date/guests 未提供时置空/None，相关回显检查自动跳过。
+    """
+
+    hotels: List[str]  # 用户选择的酒店
+    date: str = ""  # 入住日期（可选；空则跳过日期回显检查）
+    guests: Optional[int] = None  # 人数（可选；None 则跳过人数回显检查）
+    nights: int = 1  # 入住天数（晚数）
+    region: Optional[str] = None  # 用户要求的区域偏好（可选，无则 None）
+    budget: Optional[float] = None  # 用户预算（可选，无则 None）
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EvalReference:
+    """参考信息（真值/基准）—— 评测方提供，用于比对 LLM 输出，与 LLM 输出无关。
+
+    两类：酒店信息详情（事实库）+ 用户画像。
+    注意：这不是被测 LLM 的入参，别把它当输入；也不要从 LLM 输出里反推。
+    """
+
+    fact_db: Dict[str, HotelFact] = field(default_factory=dict)  # 酒店信息详情
+    profile: List[str] = field(default_factory=list)  # 用户画像标签（独自/亲子/情侣/商务 …）
 
 
 @dataclass
@@ -71,8 +89,8 @@ class LLMOutput:
     """从 LLM 原始输出抽取出的结构化视图（抽取逻辑见 extractor.py）。"""
 
     raw: str
-    requirement_text: str = ""  # 需求理解段原文（用于画像抽取）
-    analysis_text: str = ""  # 分析段原文（用于受众信号抽取）
+    requirement_text: str = ""  # 需求理解段原文（用于回显/覆盖检查）
+    analysis_text: str = ""  # 分析段原文（用于勾选覆盖/越界检查）
     dates: List[str] = field(default_factory=list)  # 输出里出现的所有日期
     requirement_star: Optional[str] = None  # 需求段声称的星级
     requirement_region: Optional[str] = None  # 需求段声称的区域

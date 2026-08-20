@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-from . import judge, online, prompts, relevance, report
+from . import judge, online, prompts, report
+from .casefile import load_case
 from .extractor import parse_llm_output
-from .schema import Claim, HotelFact, HotelInput
+from .schema import Claim
 
 # --------------------------------------------------------------------------- #
 # 被测数据（真实样例，来自用户粘贴的酒店推荐输出）
@@ -46,36 +47,20 @@ RAW_OUTPUT = """需求理解完成
 |亮点设施|免费停车场、无烟楼层|无烟楼层、电梯、外卖接收|充电车位、付费停车场|
 """
 
-INPUT = HotelInput(
-    hotels=[
-        "宿适精选酒店（上海虹桥国展中心店）",
-        "上海埕前假日酒店（大场镇地铁站店）",
-        "季朵酒店（上海国际旅游度假区店）",
-    ],
-    date="2026-08-19",
-    guests=1,  # 需求说"独自"
-    nights=1,
-)
+# --------------------------------------------------------------------------- #
+# 评测数据（来自数据文件，与 LLM 输出无关）
+#   - 入参（用户输入）  ：天数/日期/人数/选择的酒店 —— 被测 LLM 收到的请求
+#   - 参考信息（基准）  ：酒店信息详情 + 用户画像 —— 评测方提供，用于比对
+# --------------------------------------------------------------------------- #
+CASE = load_case()
+INPUT = CASE.input  # 入参
+REF = CASE.reference  # 参考信息
+FACT_DB = REF.fact_db  # 酒店信息详情
+PROFILE = REF.profile  # 用户画像
 
-FACT_DB = {
-    "宿适精选酒店（上海虹桥国展中心店）": HotelFact(
-        name="宿适精选酒店（上海虹桥国展中心店）",
-        region="青浦区", star="舒适型", price=153, score=4.2,
-        facilities=["临洮路地铁站步行可达", "周边餐饮丰富"],
-    ),
-    "上海埕前假日酒店（大场镇地铁站店）": HotelFact(
-        name="上海埕前假日酒店（大场镇地铁站店）",
-        region="宝山区", star="经济型", price=184, score=4.6,
-        facilities=["独立洗衣机", "一次性干巾"],
-    ),
-    "季朵酒店（上海国际旅游度假区店）": HotelFact(
-        name="季朵酒店（上海国际旅游度假区店）",
-        region="浦东新区", star="舒适型", price=202, score=5.0,
-        facilities=["迪士尼接驳", "川沙地铁站送站", "投影设备"],
-    ),
-}
-
-# 事实声称：结构化部分（方案/对比表）可靠抽取；自由文本里的声称手工补（生产里由系统结构化输出或抽取模型负责）
+# LLM 侧声称：来自输出的客观声称（这是"被测对象"，不是基准）。
+# 结构化部分（方案/对比表）可可靠抽取；自由文本里的声称这里手工补
+# （生产里由系统结构化输出或抽取模型负责）。基准在 fact_db 里。
 CLAIMS = [
     Claim(hotel="宿适精选酒店（上海虹桥国展中心店）", attribute="price", value=153, source="分析段"),
     Claim(hotel="上海埕前假日酒店（大场镇地铁站店）", attribute="price", value=184, source="方案二"),
@@ -89,15 +74,12 @@ CLAIMS = [
 
 def _judge_payloads(out) -> dict:
     reasons = "\n".join(r for h in out.results for r in h.reasons)
-    profile = relevance.extract_user_profile(out.requirement_text)
-    audience = relevance.extract_audience_signals((out.analysis_text or "") + "\n" + reasons)
     return {
         "语义": {"text": reasons or out.raw},
         "相关性": {
-            "input": {"hotels": INPUT.hotels, "date": INPUT.date, "guests": INPUT.guests},
-            "user_profile": profile,
+            "input": {"selected_hotels": INPUT.hotels, "date": INPUT.date, "guests": INPUT.guests},
+            "user_profile": PROFILE,  # 参考画像（基准），不是 LLM 复述
             "results": [r.name for r in out.results],
-            "reasons_audience": audience,
             "reasons": reasons,
         },
         "安全性": {"text": out.raw},
@@ -106,45 +88,16 @@ def _judge_payloads(out) -> dict:
     }
 
 
-def run_audience_selfcheck() -> None:
-    """验证画像/受众词典扩展到情侣/商务后不漏报、不误报。"""
-    cases = [
-        # (标签, 画像文本, 受众文本, 预期画像, 预期错位)
-        ("亲子·匹配", "带孩子去迪士尼，两大一小", "适合亲子家庭，有儿童乐园", ["亲子家庭"], []),
-        ("情侣·匹配", "情侣出游，想要蜜月氛围", "浪漫情侣房，适合蜜月情侣", ["情侣出行"], []),
-        ("商务·匹配", "商务出差，要在会展中心开会", "商务首选，近会展中心有会议室", ["商务出差"], []),
-        ("独自→亲子", "独自出行，一个人住一晚", "特别适合亲子家庭和迪士尼游客", ["独自出行"], ["亲子家庭"]),
-        ("商务→亲子", "商务出差开会", "适合亲子家庭带娃入住", ["商务出差"], ["亲子家庭"]),
-        ("情侣→商务", "情侣蜜月旅行", "商务出差首选，会议室齐全", ["情侣出行"], ["商务出差"]),
-        ("无画像跳过", "帮我找一家上海的酒店住一晚", "适合亲子家庭", [], []),
-    ]
-    print()
-    print("=" * 72)
-    print("受众匹配自检（扩展标签：情侣/商务等，验证不漏报不误报）")
-    print("=" * 72)
-    all_ok = True
-    for label, ptext, atext, exp_profile, exp_mismatch in cases:
-        profile = relevance.extract_user_profile(ptext)
-        audience = relevance.extract_audience_signals(atext)
-        mismatch = relevance.audience_mismatch(profile, audience)
-        ok = (profile == exp_profile) and (mismatch == exp_mismatch)
-        all_ok = all_ok and ok
-        mark = "✓" if ok else "✗"
-        print(f"[{mark}] {label}")
-        print(f"    画像文本: {ptext}")
-        print(f"    受众文本: {atext}")
-        print(f"    画像={profile}  受众={audience}  错位={mismatch}")
-        if not ok:
-            print(f"    !!! 预期 画像={exp_profile} 错位={exp_mismatch}")
-        print()
-    print("自检结论:", "全部通过 ✓" if all_ok else "存在不一致 ✗")
-
-
 def main() -> None:
     out = parse_llm_output(RAW_OUTPUT, INPUT.hotels)
 
+    # 0) 展示评测数据（入参 vs 参考信息，均来自数据文件，与 LLM 输出无关）
+    print(f"入参(用户输入): case={CASE.case_id}  选择酒店={INPUT.hotels}  天数={INPUT.nights}  日期={INPUT.date or '-'}  人数={INPUT.guests or '-'}")
+    print(f"参考信息(基准): 酒店详情={len(FACT_DB)} 家  用户画像={PROFILE}")
+    print()
+
     # 1) 全量确定性层（在线也跑这套，零成本）
-    issues = online.run_full_layer(INPUT, out, FACT_DB, CLAIMS)
+    issues = online.run_full_layer(INPUT, out, FACT_DB, CLAIMS, PROFILE)
 
     # 2) judge 层（有 key 才跑）
     payloads = _judge_payloads(out)
@@ -153,7 +106,7 @@ def main() -> None:
         judge_results[dim] = judge.judge_structured(dim, payload)
 
     # 3) 报告
-    report.render(issues, judge_results, INPUT, out)
+    report.render(issues, judge_results, INPUT, out, PROFILE, len(FACT_DB))
 
     # 4) 展示 judge 提示词样例（供对照你现在的手写 prompt）
     if all(r is None for r in judge_results.values()):
@@ -178,9 +131,6 @@ def main() -> None:
         online.OnlineRecord("g", 3.5, booked=0),
     ]
     print(online.compute_calibration(demo_records))
-
-    # 6) 受众匹配词典自检
-    run_audience_selfcheck()
 
 
 if __name__ == "__main__":

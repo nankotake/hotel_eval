@@ -17,7 +17,14 @@ _LAYER_LABEL = {
 }
 
 
-def render(issues: List[Issue], judge_results: Dict[str, dict], inp: HotelInput, out: LLMOutput) -> None:
+def render(
+    issues: List[Issue],
+    judge_results: Dict[str, dict],
+    inp: HotelInput,
+    out: LLMOutput,
+    profile: List[str] = None,
+    fact_count: int = 0,
+) -> None:
     by_layer: Dict[str, List[Issue]] = {}
     for i in issues:
         by_layer.setdefault(i.layer, []).append(i)
@@ -25,8 +32,10 @@ def render(issues: List[Issue], judge_results: Dict[str, dict], inp: HotelInput,
     print("=" * 72)
     print("酒店推荐评测报告")
     print("=" * 72)
-    print(f"输入 : 酒店={inp.hotels}")
-    print(f"       日期={inp.date}  人数={inp.guests}")
+    print(f"入参(用户输入) : case={inp.extra.get('case_id', '-')}")
+    print(f"  选择酒店     : {inp.hotels}")
+    print(f"  入住条件     : 天数={inp.nights}  日期={inp.date or '-'}  人数={inp.guests or '-'}")
+    print(f"参考信息(基准) : 酒店详情={fact_count} 家  用户画像={profile or '(未提供)'}")
     print(f"抽取 : 推荐结果={[r.name for r in out.results]}")
     print(f"       输出日期={out.dates}  需求星级={out.requirement_star}  需求区域={out.requirement_region}")
     print()

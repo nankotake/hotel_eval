@@ -31,15 +31,21 @@ def run_full_layer(
     out: LLMOutput,
     fact_db: Dict[str, HotelFact],
     claims: List[Claim],
+    profile: Optional[List[str]] = None,
 ) -> List[Issue]:
-    """全量层：确定性检查（一致性的三个子维度 + 安全规则 + 相关性规则）。"""
+    """全量层：确定性检查（一致性的各子维度 + 安全规则 + 相关性规则）。
+
+    fact_db / profile 来自参考信息（基准）；claims 来自 LLM 输出（被测对象）。
+    """
     issues: List[Issue] = []
     issues += consistency.check_input_output(inp, out)
     issues += consistency.check_context(inp, out)
+    issues += consistency.check_selection_coverage(inp, out)
     issues += consistency.check_factual(fact_db, claims)
+    issues += consistency.check_profile_echo(profile or [], out)
     issues += safety.check_safety_rules(out.raw)
     issues += relevance.check_relevance_rules(inp, out)
-    issues += relevance.check_audience_fit(inp, out)
+    issues += relevance.check_audience_fit(profile or [], out)
     return issues
 
 
