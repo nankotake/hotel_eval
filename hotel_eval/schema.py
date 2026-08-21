@@ -43,11 +43,14 @@ class EvalReference:
     """参考信息（真值/基准）—— 评测方提供，用于比对 LLM 输出，与 LLM 输出无关。
 
     两类：酒店信息详情（事实库）+ 用户画像。
+    用户画像是开放式描述（不是枚举值），评测时交给 judge 做语义匹配，
+    不做关键词词典硬匹配。
     注意：这不是被测 LLM 的入参，别把它当输入；也不要从 LLM 输出里反推。
     """
 
     fact_db: Dict[str, HotelFact] = field(default_factory=dict)  # 酒店信息详情
-    profile: List[str] = field(default_factory=list)  # 用户画像标签（独自/亲子/情侣/商务 …）
+    profile: List[str] = field(default_factory=list)  # 用户画像标签（结构化，可选）
+    profile_text: str = ""  # 用户画像自由描述（开放式，judge 语义匹配用）
 
 
 @dataclass
@@ -97,10 +100,11 @@ class LLMOutput:
     requirement_guests: Optional[int] = None  # 需求段声称的人数
     requirement_hotels: List[str] = field(default_factory=list)  # 需求段回显的酒店（归一后匹配输入）
     analysis_hotels: List[str] = field(default_factory=list)  # 分析段提及的酒店
-    analysis_claims: List[Claim] = field(default_factory=list)  # 分析段事实声称
+    analysis_claims: List[Claim] = field(default_factory=list)  # 分析段自动抽取的事实声称（价格等）
     results: List[RecommendedHotel] = field(default_factory=list)
-    table: List[Dict[str, str]] = field(default_factory=list)  # 对比表行
-    reason_claims: List[Claim] = field(default_factory=list)  # 理由段事实声称
+    table: List[List[str]] = field(default_factory=list)  # 对比表行（每行是单元格列表）
+    table_claims: List[Claim] = field(default_factory=list)  # 对比表自动抽取的声称（价格/评分）
+    reason_claims: List[Claim] = field(default_factory=list)  # 方案块自动抽取的声称（价格/档次）
 
 
 @dataclass

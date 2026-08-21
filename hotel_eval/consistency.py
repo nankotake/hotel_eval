@@ -1,18 +1,17 @@
 """consistency.py —— 维度 1：一致性（确定性 floor 层，不问模型）
 
-六个子维度：
+四个子维度：
   1. check_input_output       输入输出一致性（回显）：输出是否忠于入参（选择的酒店/日期/人数）
   2. check_context            上下文一致性（内部自洽）：输出各段之间是否矛盾
   3. check_factual            事实一致性（查库）：客观声称是否与参考信息（事实库）一致
   4. check_selection_coverage 勾选覆盖：是否覆盖入参里选择的每家、有没有越界对比没选的
-  5. check_profile_echo       画像回显：LLM 复述的用户画像 vs 参考画像（参考信息）
 
 说明：
   - 酒店名比较一律用 normalize_name()，容忍粘贴的排版差异。
   - 日期检查区分"入住/离店"：离店 = 入住 + 晚数，是合法日期，不算违规。
   - "分析了 N 家、只推荐其中 2 家"是正常行为；只抓"推荐了但根本没分析过"的。
-  - 入参（天数/日期/人数/选择酒店）≠ 参考信息（酒店详情/用户画像），别混；画像基准
-    来自参考信息，不要用 LLM 复述当基准。
+  - 入参（天数/日期/人数/选择酒店）≠ 参考信息（酒店详情/用户画像），别混。
+  - 用户画像是开放式描述，不做关键词硬匹配（画像贴合交给 judge，见 relevance.py）。
 """
 
 from __future__ import annotations
@@ -274,28 +273,3 @@ def check_selection_coverage(inp: HotelInput, out: LLMOutput) -> List[Issue]:
 
     return issues
 
-
-# --------------------------------------------------------------------------- #
-# 5. 画像回显（参考画像 vs LLM 复述）
-# --------------------------------------------------------------------------- #
-
-def check_profile_echo(profile: List[str], out: LLMOutput) -> List[Issue]:
-    """LLM 在'需求理解段'复述的用户画像 vs 参考画像（参考信息里的基准）。
-
-    参考画像来自参考信息（画像服务/业务侧标注）；LLM 复述画像用关键词抽取
-    （尽力而为）。复述漏掉参考画像标签 = 没读懂用户，按输入输出一致性处理。
-    """
-    from . import relevance  # 局部导入，避免跨维度模块级循环依赖
-
-    issues: List[Issue] = []
-    if not profile:
-        return issues
-    llm_profile = relevance.extract_user_profile(out.requirement_text)
-    missing = [t for t in profile if t not in llm_profile]
-    if missing:
-        issues.append(_issue(
-            "输入输出·画像回显", "gate", False,
-            f"需求段未体现参考画像标签 {missing}（LLM 复述画像={llm_profile}）",
-            evidence=out.requirement_text[:60],
-        ))
-    return issues

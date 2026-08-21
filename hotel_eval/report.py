@@ -24,6 +24,7 @@ def render(
     out: LLMOutput,
     profile: List[str] = None,
     fact_count: int = 0,
+    profile_text: str = "",
 ) -> None:
     by_layer: Dict[str, List[Issue]] = {}
     for i in issues:
@@ -36,6 +37,8 @@ def render(
     print(f"  选择酒店     : {inp.hotels}")
     print(f"  入住条件     : 天数={inp.nights}  日期={inp.date or '-'}  人数={inp.guests or '-'}")
     print(f"参考信息(基准) : 酒店详情={fact_count} 家  用户画像={profile or '(未提供)'}")
+    if profile_text:
+        print(f"                 画像描述: {profile_text}")
     print(f"抽取 : 推荐结果={[r.name for r in out.results]}")
     print(f"       输出日期={out.dates}  需求星级={out.requirement_star}  需求区域={out.requirement_region}")
     print()

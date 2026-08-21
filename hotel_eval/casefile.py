@@ -1,27 +1,31 @@
-"""casefile.py —— 评测数据加载（入参 + 参考信息，均独立于 LLM 输出）
+"""casefile.py —— 评测数据加载（入参 + 参考信息 + 评测对象，JSON 数组）
 
 三类数据要分清：
 
   - 用户输入（入参）    ：入住天数/日期/人数/选择的酒店 —— 被测 LLM 收到的请求
   - 参考信息（真值/基准）：酒店信息详情（事实库）+ 用户画像 —— 评测方提供，用于比对
-  - 评测对象            ：LLM 输出（不在此文件里，单独传入评测链路）
+  - 评测对象            ：LLM 原始输出（被测系统的回答）
 
-本模块从 JSON 数据文件加载"入参 + 参考信息"。文件与 LLM 输出完全无关——
-不要从 LLM 输出里抄值进来当基准，否则事实核对就变成了同义反复。
+文件都是 JSON 数组，加 case 就往里加一项：
+  - data/eval_cases.json    入参 + 参考信息（一项 = 一个 case）
+  - data/llm_outputs.json   评测对象（一项 = 一份 LLM 输出，按 case_id 挂到 case）
 
-文件位置：hotel_eval/data/eval_case.json（可传自定义路径）
+case_id 是关联键：llm_outputs 的 case_id 必须能对上 eval_cases 的 case_id；
+同一个 case 可以挂多份输出（不同模型/不同时间）做对比评测。
 """
 
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .schema import EvalReference, HotelFact, HotelInput
+from .schema import Claim, EvalReference, HotelFact, HotelInput
 
-DEFAULT_CASE_PATH = os.path.join(os.path.dirname(__file__), "data", "eval_case.json")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DEFAULT_CASES_PATH = os.path.join(DATA_DIR, "eval_cases.json")
+DEFAULT_OUTPUTS_PATH = os.path.join(DATA_DIR, "llm_outputs.json")
 
 
 @dataclass
@@ -33,12 +37,25 @@ class EvalCase:
     reference: EvalReference  # 参考信息（基准）：酒店信息详情 + 用户画像
 
 
-def load_case(path: str = DEFAULT_CASE_PATH) -> EvalCase:
-    """从 JSON 加载评测数据 → EvalCase（入参 + 参考信息）。"""
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
+@dataclass
+class LLMOutputRecord:
+    """一份评测对象：LLM 原始输出 + 从输出抽取的客观声称（claims）。"""
 
-    # ---- 入参：用户输入 ----
+    case_id: str  # 关联到 eval_cases 里的 case
+    raw: str
+    source: str = ""  # 来源标注（可选）
+    note: str = ""  # 备注（可选）
+    claims: List[Claim] = field(default_factory=list)
+
+
+def load_cases(path: str = DEFAULT_CASES_PATH) -> List[EvalCase]:
+    """加载全部评测用例（入参 + 参考信息）。"""
+    with open(path, encoding="utf-8") as f:
+        items = json.load(f)
+    return [_parse_case(it) for it in items]
+
+
+def _parse_case(raw: dict) -> EvalCase:
     inp_raw = raw.get("input", {})
     inp = HotelInput(
         hotels=list(inp_raw.get("hotels", [])),  # 选择的酒店
@@ -49,17 +66,42 @@ def load_case(path: str = DEFAULT_CASE_PATH) -> EvalCase:
         budget=inp_raw.get("budget"),
         extra={"case_id": raw.get("case_id", "")},
     )
-
-    # ---- 参考信息：酒店信息详情 + 用户画像 ----
     ref_raw = raw.get("reference", {})
     fact_db = {
         name: HotelFact(name=name, **fields)
         for name, fields in ref_raw.get("fact_db", {}).items()
     }
-    profile = list(ref_raw.get("user_profile", {}).get("tags", []))
-
+    profile_raw = ref_raw.get("user_profile", {})
+    profile = list(profile_raw.get("tags", []))
+    profile_text = profile_raw.get("description", "")
     return EvalCase(
         case_id=raw.get("case_id", ""),
         input=inp,
-        reference=EvalReference(fact_db=fact_db, profile=profile),
+        reference=EvalReference(fact_db=fact_db, profile=profile, profile_text=profile_text),
+    )
+
+
+def load_llm_outputs(path: str = DEFAULT_OUTPUTS_PATH) -> List[LLMOutputRecord]:
+    """加载全部评测对象（LLM 输出）。"""
+    with open(path, encoding="utf-8") as f:
+        items = json.load(f)
+    return [_parse_output(it) for it in items]
+
+
+def _parse_output(raw: dict) -> LLMOutputRecord:
+    claims = [
+        Claim(
+            hotel=c.get("hotel", ""),
+            attribute=c.get("attribute", ""),
+            value=c.get("value"),
+            source=c.get("source", ""),
+        )
+        for c in raw.get("claims", [])
+    ]
+    return LLMOutputRecord(
+        case_id=raw.get("case_id", ""),
+        raw=raw.get("raw", ""),
+        source=raw.get("source", ""),
+        note=raw.get("note", ""),
+        claims=claims,
     )

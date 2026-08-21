@@ -4,6 +4,11 @@
   - 生产系统里，最好让被测系统直接输出结构化 JSON，本模块的 parse 只做"校验 + 归一化"。
   - 这里提供一套针对"文本渲染输出"的正则解析，作为 demo 级实现，用于跑通评测链路。
   - 所有跨段/跨库的酒店名匹配都用 normalize_name()，容忍粘贴时的空格/全半角括号差异。
+
+声称（claim）自动抽取（方式 2：确定性规则）：
+  - 结构化部分可靠抽取：对比表 → 价格/评分；方案块 → 价格/档次；分析段 → 价格（N元起）
+  - 自由文本里的其他声称（如"3公里内有300家餐厅"）不做启发式，留给 NLI 模型 / LLM
+    抽取（方式 3/4），或由调用方手工补充（llm_outputs.json 的 claims 字段）
 """
 
 from __future__ import annotations
@@ -11,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from .schema import HotelInput, LLMOutput, RecommendedHotel, normalize_name
+from .schema import Claim, HotelInput, LLMOutput, RecommendedHotel, normalize_name
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日")
 _GUESTS_RE = re.compile(r"(\d+)\s*(?:人|位|名)(?!晚|星|元|家|间)")
@@ -74,9 +79,9 @@ def extract_results(text: str) -> List[RecommendedHotel]:
     return results
 
 
-def extract_table(text: str) -> List[dict]:
+def extract_table(text: str) -> List[list]:
     """抽取 markdown 对比表行（尽力而为）。"""
-    rows: List[dict] = []
+    rows: List[list] = []
     for line in text.splitlines():
         if "|" not in line:
             continue
@@ -85,6 +90,70 @@ def extract_table(text: str) -> List[dict]:
             continue
         rows.append(cells)
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# 声称自动抽取（确定性规则，方式 2）
+# --------------------------------------------------------------------------- #
+
+def extract_analysis_claims(text: str, input_hotels: List[str]) -> List[Claim]:
+    """分析段 → 价格声称（N元起）。
+
+    按行定位到对应酒店后再抽，避免跨段误抽；分析段自由文本的其他声称
+    （设施/评分等）不做启发式，留给 NLI/LLM 抽取或手工补充。
+    """
+    claims: List[Claim] = []
+    seg = _segment(text, "酒店分析")
+    lines = [re.sub(r"\s+", "", ln) for ln in seg.splitlines()]
+    for h in input_hotels:
+        core = _core_name(h)
+        for ln in lines:
+            if core in ln:
+                m = re.search(r"(\d+)\s*元起", ln)
+                if m:
+                    claims.append(Claim(hotel=h, attribute="price", value=int(m.group(1)), source="分析段"))
+                break
+    return claims
+
+
+def extract_result_claims(results: List[RecommendedHotel]) -> List[Claim]:
+    """方案块 → 价格/档次声称（price_text 已抽成纯数字，level_text 如 经济型/舒适型）。"""
+    claims: List[Claim] = []
+    for r in results:
+        if r.price_text and r.price_text.isdigit():
+            claims.append(Claim(hotel=r.name, attribute="price", value=int(r.price_text), source=f"方案{r.rank}"))
+        if r.level_text in ("舒适型", "经济型", "豪华型"):
+            claims.append(Claim(hotel=r.name, attribute="star", value=r.level_text, source=f"方案{r.rank}"))
+    return claims
+
+
+def extract_table_claims(table: List[list], input_hotels: List[str]) -> List[Claim]:
+    """对比表 → 价格/评分声称。表头酒店名可能截断（"季朵酒店（上海国际旅游度假..."），
+    用全名/短名/前缀匹配回输入酒店。"""
+    claims: List[Claim] = []
+    if not table:
+        return claims
+    header = table[0]
+    if not header or header[0].strip() != "酒店":
+        return claims
+    col_hotels = [_match_input_hotel(cell, input_hotels) for cell in header[1:]]
+    for row in table[1:]:
+        if len(row) < 2:
+            continue
+        field = row[0].strip()
+        for ci, cell in enumerate(row[1:], start=1):
+            hotel = col_hotels[ci - 1] if ci - 1 < len(col_hotels) else None
+            if not hotel or not cell:
+                continue
+            if field == "价格":
+                m = _PRICE_RE.search(cell)
+                if m:
+                    claims.append(Claim(hotel=hotel, attribute="price", value=int(m.group(1)), source="对比表"))
+            elif field == "评分":
+                m = re.search(r"(\d(?:\.\d)?)", cell)
+                if m:
+                    claims.append(Claim(hotel=hotel, attribute="score", value=float(m.group(1)), source="对比表"))
+    return claims
 
 
 def parse_llm_output(raw: str, input_hotels: List[str]) -> LLMOutput:
@@ -100,12 +169,34 @@ def parse_llm_output(raw: str, input_hotels: List[str]) -> LLMOutput:
     out.analysis_hotels = extract_analysis_hotels(raw, input_hotels)
     out.results = extract_results(raw)
     out.table = extract_table(raw)
+    # 声称自动抽取：对比表（价格/评分）+ 方案块（价格/档次）+ 分析段（价格）
+    out.table_claims = extract_table_claims(out.table, input_hotels)
+    out.reason_claims = extract_result_claims(out.results)
+    out.analysis_claims = extract_analysis_claims(raw, input_hotels)
     return out
 
 
 # --------------------------------------------------------------------------- #
 # 内部工具
 # --------------------------------------------------------------------------- #
+
+def _core_name(name: str) -> str:
+    """酒店短名（去掉括号后缀），如 '季朵酒店'；用于跨段/跨库匹配。"""
+    return normalize_name(name).split("(")[0]
+
+
+def _match_input_hotel(cell: str, input_hotels: List[str]):
+    """表头单元格（可能截断成前缀 / 只写短名）匹配到哪个输入酒店；匹配不到返回 None。"""
+    cn = normalize_name(cell)
+    if not cn:
+        return None
+    for h in input_hotels:
+        hn = normalize_name(h)
+        core = hn.split("(")[0]
+        if hn in cn or cn in hn or (len(hn) >= 6 and hn[:6] in cn) or (len(core) >= 4 and core in cn):
+            return h
+    return None
+
 
 def _segment(text: str, keyword: str) -> str:
     """截取从 keyword 到下一个已知段落标题之间的文本。"""
