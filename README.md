@@ -58,9 +58,11 @@ hotel_eval/
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-# torch 建议用 CPU wheel 减小体积：
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
+
+> **依赖说明**：`requirements.txt` 写明了各依赖的用途。
+> - `bert-score` 会自动拉起 `torch` + `transformers` 作为底层，因此这两个大件**不用手动写进 requirements**（pip 会自动装）。torch 建议用 CPU wheel 减小体积：`pip install torch --index-url https://download.pytorch.org/whl/cpu`。
+> - `bert-score` 首次计算会联网下载默认模型（`distilbert-base-uncased`），离线环境需提前缓存或换本地模型。
 
 ## 运行
 

@@ -1,14 +1,32 @@
 # hotel_eval 运行依赖
-# 注意：bert-score 会拉起 torch / transformers；torch 建议用 CPU wheel 减小体积：
+#
+# 安装顺序建议：先装 torch（CPU 版），再装其余依赖，避免 pip 解析冲突。
+#   torch 建议用 CPU wheel 减小体积：
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 
+# ---------------------------------------------------------------------------
 # 评测指标 / 统计
+# ---------------------------------------------------------------------------
+# bert-score 会【自动拉起 torch + transformers】作为底层（token 级语义对齐），
+# 因此它虽没写进 requirements，但会随 bert-score 一起安装。
+# 需要额外注意：bert-score 首次计算会联网下载模型（默认 distilbert-base-uncased）。
 bert-score
-scipy
+scipy            # online 层行为校准：point-biserial / spearman 相关
 
+# ---------------------------------------------------------------------------
 # LLM-as-judge
-openai
+# ---------------------------------------------------------------------------
+openai           # judge 层调用 OpenAI 兼容端点（OpenAI / DeepSeek 等）
 
-# 可视化界面（Web）
-fastapi
-uvicorn[standard]
+# ---------------------------------------------------------------------------
+# 可视化界面（Web，FastAPI + 前端）
+# ---------------------------------------------------------------------------
+fastapi          # REST 后端
+uvicorn[standard]# ASGI 服务器，启动 Web 界面
+
+# ---------------------------------------------------------------------------
+# 说明：以下为 bert-score 的【传递依赖】，由 pip 自动安装，通常无需手动指定；
+# 若环境离线或想精确控制版本，可显式固定：
+#   torch          # 深度学习张量库（bert-score / transformers 底层）
+#   transformers   # 预训练模型加载（bert-score 依赖）
+# ---------------------------------------------------------------------------
