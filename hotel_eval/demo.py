@@ -9,78 +9,38 @@
 
 from __future__ import annotations
 
-from typing import List
-
-from . import judge, online, prompts, report
+from . import prompts, report
 from .casefile import EvalCase, LLMOutputRecord, load_cases, load_llm_outputs
-from .extractor import parse_llm_output
-from .schema import Claim, EvalReference, HotelInput, LLMOutput, normalize_name
-
-
-def _judge_payloads(inp: HotelInput, ref: EvalReference, out: LLMOutput) -> dict:
-    reasons = "\n".join(r for h in out.results for r in h.reasons)
-    return {
-        "语义": {"text": reasons or out.raw},
-        "相关性": {
-            "input": {"selected_hotels": inp.hotels, "date": inp.date, "guests": inp.guests},
-            # 参考画像（基准，开放式）：标签 + 自由描述，judge 语义判断贴合度
-            "user_profile": {"tags": ref.profile, "description": ref.profile_text},
-            "results": [r.name for r in out.results],
-            "reasons": reasons,
-        },
-        "安全性": {"text": out.raw},
-        "权衡质量": {"input": inp.hotels, "results": [r.name for r in out.results],
-                      "reasons": reasons},
-    }
-
-
-def _dedup_claims(claims: List[Claim]) -> List[Claim]:
-    """同酒店 + 属性 + 值的声称只留一条（自动抽取的对比表/方案块/分析段可能重复）。"""
-    seen, out = set(), []
-    for c in claims:
-        key = (normalize_name(c.hotel), c.attribute, repr(c.value))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-    return out
+from .engine import _judge_payloads, run_case_eval
 
 
 def run_one(case: EvalCase, rec: LLMOutputRecord, show_prompt: bool = False) -> None:
-    """跑一个 case 的一份 LLM 输出：抽取 → 全量确定性层 → judge → 报告。"""
-    inp = case.input
-    ref = case.reference
-    fact_db = ref.fact_db
-    out = parse_llm_output(rec.raw, inp.hotels)
+    """跑一个 case 的一份 LLM 输出：抽取 → 全量确定性层 → judge → 报告。
 
-    # 声称 = 自动抽取（对比表/方案块/分析段的结构化部分）
-    #      + 手工补充（自由文本声称，llm_outputs.json 的 claims 字段；生产里由 NLI/LLM 抽取）
-    claims = _dedup_claims(out.analysis_claims + out.reason_claims + out.table_claims + rec.claims)
+    实际计算委托给 engine.run_case_eval（返回结构化结果），这里只负责打印。
+    """
+    result = run_case_eval(case, rec)
+
+    inp = result.input
+    ref = result.reference
+    out = result.output
 
     print()
     print("=" * 72)
     print(f"评测 case: {case.case_id}   输出来源: {rec.source or '(未标注)'}")
     print(f"入参(用户输入): 选择酒店={inp.hotels}  天数={inp.nights}  日期={inp.date or '-'}  人数={inp.guests or '-'}")
-    print(f"参考信息(基准): 酒店详情={len(fact_db)} 家  用户画像={ref.profile or '(未提供)'}")
+    print(f"参考信息(基准): 酒店详情={len(ref.fact_db)} 家  用户画像={ref.profile or '(未提供)'}")
     if ref.profile_text:
         print(f"                画像描述: {ref.profile_text}")
-    print(f"声称(待核对): {len(claims)} 条（自动 {len(out.analysis_claims) + len(out.reason_claims) + len(out.table_claims)} + 手工 {len(rec.claims)}，去重后）")
+    print(f"声称(待核对): {result.claims_count} 条（自动 {len(out.analysis_claims) + len(out.reason_claims) + len(out.table_claims)} + 手工 {len(rec.claims)}，去重后）")
     print()
 
-    # 1) 全量确定性层（在线也跑这套，零成本；画像匹配是语义判断，在 judge 层做）
-    issues = online.run_full_layer(inp, out, fact_db, claims)
+    # 报告
+    report.render(result.issues, result.judge_results, inp, out, ref.profile, len(ref.fact_db), ref.profile_text)
 
-    # 2) judge 层（有 key 才跑；参考画像随相关性 payload 传给 judge 做语义贴合判断）
-    payloads = _judge_payloads(inp, ref, out)
-    judge_results = {}
-    for dim, payload in payloads.items():
-        judge_results[dim] = judge.judge_structured(dim, payload)
-
-    # 3) 报告
-    report.render(issues, judge_results, inp, out, ref.profile, len(fact_db), ref.profile_text)
-
-    # 4) 展示 judge 提示词样例（供对照手写 prompt；只在第一份输出打印一次）
-    if show_prompt and all(r is None for r in judge_results.values()):
+    # 展示 judge 提示词样例（供对照手写 prompt；只在第一份输出打印一次）
+    if show_prompt and not result.conclusion()["judge_enabled"]:
+        payloads = _judge_payloads(inp, ref, out)
         print("=" * 72)
         print("提示：未检测到 JUDGE_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY。")
         print("judge 层跳过；下面打印'相关性'维度的 judge 提示词模板，供对照：")

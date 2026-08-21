@@ -1,0 +1,14 @@
+# hotel_eval 运行依赖
+# 注意：bert-score 会拉起 torch / transformers；torch 建议用 CPU wheel 减小体积：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# 评测指标 / 统计
+bert-score
+scipy
+
+# LLM-as-judge
+openai
+
+# 可视化界面（Web）
+fastapi
+uvicorn[standard]

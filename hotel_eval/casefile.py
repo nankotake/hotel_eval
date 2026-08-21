@@ -35,6 +35,19 @@ class EvalCase:
     case_id: str
     input: HotelInput  # 用户输入（入参）：天数/日期/人数/选择的酒店
     reference: EvalReference  # 参考信息（基准）：酒店信息详情 + 用户画像
+    note: str = ""  # 说明/备注（可选，数据文件里的顶层 note，保留用）
+
+    def to_dict(self) -> dict:
+        d = {"case_id": self.case_id}
+        if self.note:
+            d["note"] = self.note
+        inp = self.input.to_dict()
+        if inp:
+            d["input"] = inp
+        ref = self.reference.to_dict()
+        if ref:
+            d["reference"] = ref
+        return d
 
 
 @dataclass
@@ -46,6 +59,22 @@ class LLMOutputRecord:
     source: str = ""  # 来源标注（可选）
     note: str = ""  # 备注（可选）
     claims: List[Claim] = field(default_factory=list)
+    output_id: str = ""  # Web 端用：同一 case 多份输出的唯一标识（缺省时按索引管理）
+
+    def to_dict(self) -> dict:
+        d = {
+            "case_id": self.case_id,
+            "raw": self.raw,
+        }
+        if self.source:
+            d["source"] = self.source
+        if self.note:
+            d["note"] = self.note
+        if self.output_id:
+            d["output_id"] = self.output_id
+        if self.claims:
+            d["claims"] = [c.to_dict() for c in self.claims]
+        return d
 
 
 def load_cases(path: str = DEFAULT_CASES_PATH) -> List[EvalCase]:
@@ -53,6 +82,11 @@ def load_cases(path: str = DEFAULT_CASES_PATH) -> List[EvalCase]:
     with open(path, encoding="utf-8") as f:
         items = json.load(f)
     return [_parse_case(it) for it in items]
+
+
+def build_case(data: dict) -> EvalCase:
+    """从 dict 构建 EvalCase（与 eval_cases.json 里一项同构），供 Web 端新建/编辑。"""
+    return _parse_case(data)
 
 
 def _parse_case(raw: dict) -> EvalCase:
@@ -68,16 +102,23 @@ def _parse_case(raw: dict) -> EvalCase:
     )
     ref_raw = raw.get("reference", {})
     fact_db = {
-        name: HotelFact(name=name, **fields)
+        name: HotelFact(name=name, **{k: v for k, v in fields.items() if k != "name"})
         for name, fields in ref_raw.get("fact_db", {}).items()
     }
     profile_raw = ref_raw.get("user_profile", {})
     profile = list(profile_raw.get("tags", []))
     profile_text = profile_raw.get("description", "")
+    profile_note = profile_raw.get("note", "")
     return EvalCase(
         case_id=raw.get("case_id", ""),
         input=inp,
-        reference=EvalReference(fact_db=fact_db, profile=profile, profile_text=profile_text),
+        reference=EvalReference(
+            fact_db=fact_db,
+            profile=profile,
+            profile_text=profile_text,
+            profile_note=profile_note,
+        ),
+        note=raw.get("note", ""),
     )
 
 
@@ -86,6 +127,11 @@ def load_llm_outputs(path: str = DEFAULT_OUTPUTS_PATH) -> List[LLMOutputRecord]:
     with open(path, encoding="utf-8") as f:
         items = json.load(f)
     return [_parse_output(it) for it in items]
+
+
+def build_output(data: dict) -> LLMOutputRecord:
+    """从 dict 构建 LLMOutputRecord（与 llm_outputs.json 里一项同构），供 Web 端新建/编辑。"""
+    return _parse_output(data)
 
 
 def _parse_output(raw: dict) -> LLMOutputRecord:
@@ -104,4 +150,5 @@ def _parse_output(raw: dict) -> LLMOutputRecord:
         source=raw.get("source", ""),
         note=raw.get("note", ""),
         claims=claims,
+        output_id=raw.get("output_id", ""),
     )

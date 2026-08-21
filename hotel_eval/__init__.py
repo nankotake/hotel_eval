@@ -18,7 +18,14 @@
 入口：python run_hotel_eval.py
 """
 
-from .casefile import EvalCase, LLMOutputRecord, load_cases, load_llm_outputs
+from .casefile import (
+    EvalCase,
+    LLMOutputRecord,
+    build_case,
+    build_output,
+    load_cases,
+    load_llm_outputs,
+)
 from .schema import (
     EvalReference,
     HotelInput,
@@ -33,6 +40,8 @@ from .schema import (
 __all__ = [
     "EvalCase",
     "LLMOutputRecord",
+    "build_case",
+    "build_output",
     "load_cases",
     "load_llm_outputs",
     "EvalReference",

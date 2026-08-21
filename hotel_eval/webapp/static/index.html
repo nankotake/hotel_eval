@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>hotel_eval 评测平台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title">hotel_eval</div>
+        <div class="brand-sub">酒店推荐评测平台</div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="cases">📋 单case管理</button>
+        <button class="nav-item" data-view="sets">🗂️ 评测集管理</button>
+        <button class="nav-item" data-view="run">▶️ 触发评测</button>
+        <button class="nav-item" data-view="records">🕘 评测记录</button>
+        <button class="nav-item" data-view="config">⚙️ 配置</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="judgeStatus" class="judge-status">judge：检测中…</div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- 单case管理 -->
+      <section class="view active" id="view-cases">
+        <div class="view-header">
+          <h1>单case 管理</h1>
+          <button class="btn primary" id="btn-new-case">+ 新建 case</button>
+        </div>
+        <div id="case-list"></div>
+      </section>
+
+      <!-- 评测集管理 -->
+      <section class="view" id="view-sets">
+        <div class="view-header">
+          <h1>评测集管理</h1>
+          <button class="btn primary" id="btn-new-set">+ 新建评测集</button>
+        </div>
+        <div id="set-list"></div>
+      </section>
+
+      <!-- 触发评测 -->
+      <section class="view" id="view-run">
+        <div class="view-header"><h1>触发评测</h1></div>
+        <div class="tabs" id="run-tabs">
+          <button class="tab active" data-mode="single">单次评测</button>
+          <button class="tab" data-mode="batch">批量评测</button>
+        </div>
+
+        <div id="run-single">
+          <div class="card">
+            <div class="form-grid">
+              <label>选择 case
+                <select id="run-single-case"></select>
+              </label>
+              <label>选择输出
+                <select id="run-single-output"></select>
+              </label>
+            </div>
+            <div class="actions"><button class="btn primary" id="btn-run-single">运行评测</button></div>
+          </div>
+          <div id="run-single-result"></div>
+        </div>
+
+        <div id="run-batch" class="hidden">
+          <div class="card">
+            <label class="inline">批量来源：
+              <select id="run-batch-source">
+                <option value="set">评测集</option>
+                <option value="cases">手动选 case</option>
+              </select>
+            </label>
+            <div id="run-batch-set-wrap">
+              <label>评测集
+                <select id="run-batch-set"></select>
+              </label>
+            </div>
+            <div id="run-batch-cases-wrap" class="hidden">
+              <div class="label">选择 case（可多选）</div>
+              <div id="run-batch-cases" class="checkbox-list"></div>
+            </div>
+            <label class="inline"><input type="checkbox" id="run-batch-first-only"> 仅跑每个 case 的第一份输出</label>
+            <div class="actions"><button class="btn primary" id="btn-run-batch">运行批量评测</button></div>
+          </div>
+          <div id="run-batch-result"></div>
+        </div>
+      </section>
+
+      <!-- 评测记录 -->
+      <section class="view" id="view-records">
+        <div class="view-header">
+          <h1>评测记录</h1>
+          <button class="btn danger" id="btn-clear-records">清空记录</button>
+        </div>
+        <div id="record-list"></div>
+      </section>
+
+      <!-- 配置 -->
+      <section class="view" id="view-config">
+        <div class="view-header"><h1>配置</h1></div>
+        <div class="card narrow">
+          <h3>LLM-as-judge 配置</h3>
+          <div class="form-grid">
+            <label>API Key
+              <input type="password" id="cfg-key" placeholder="sk-...">
+            </label>
+            <label>Base URL（DeepSeek/OpenAI 兼容端点，可选）
+              <input type="text" id="cfg-base" placeholder="https://api.deepseek.com/v1">
+            </label>
+            <label>模型
+              <input type="text" id="cfg-model" placeholder="gpt-4o-mini">
+            </label>
+          </div>
+          <div class="hint">配置了有效 key 后，触发评测时会同时跑 judge 层（语义/相关性/安全性/权衡质量）。未配置则只跑确定性层。</div>
+          <div class="actions">
+            <button class="btn primary" id="btn-save-config">保存</button>
+            <button class="btn" id="btn-test-config">测试连接</button>
+            <span id="cfg-status" class="status"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- case 详情/编辑 抽屉 -->
+  <div class="drawer-backdrop hidden" id="drawer-backdrop"></div>
+  <aside class="drawer hidden" id="case-drawer">
+    <div class="drawer-header">
+      <h2 id="drawer-title">case 详情</h2>
+      <button class="btn ghost" id="btn-close-drawer">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <!-- 报告详情 抽屉 -->
+  <aside class="drawer hidden" id="report-drawer">
+    <div class="drawer-header">
+      <h2>报告详情</h2>
+      <button class="btn ghost" id="btn-close-report">✕</button>
+    </div>
+    <div class="drawer-body" id="report-body"></div>
+  </aside>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

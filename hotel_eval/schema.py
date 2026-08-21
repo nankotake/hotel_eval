@@ -20,6 +20,19 @@ def normalize_name(s: str) -> str:
     )
 
 
+def _to_dict(dc) -> dict:
+    """dataclass -> dict，跳过值为 None / 空串 / 空列表 的字段，保持 JSON 文件干净。"""
+    from dataclasses import fields, asdict
+
+    out = {}
+    for f in fields(dc):
+        v = getattr(dc, f.name)
+        if v is None or v == "" or v == [] or v == {}:
+            continue
+        out[f.name] = asdict(v) if hasattr(v, "__dataclass_fields__") else v
+    return out
+
+
 @dataclass
 class HotelInput:
     """用户输入（入参）—— 被测 LLM 收到的请求。
@@ -37,6 +50,11 @@ class HotelInput:
     budget: Optional[float] = None  # 用户预算（可选，无则 None）
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> dict:
+        d = _to_dict(self)
+        d.pop("extra", None)  # extra 只存 case_id 关联，不入 input 序列化
+        return d
+
 
 @dataclass
 class EvalReference:
@@ -51,6 +69,23 @@ class EvalReference:
     fact_db: Dict[str, HotelFact] = field(default_factory=dict)  # 酒店信息详情
     profile: List[str] = field(default_factory=list)  # 用户画像标签（结构化，可选）
     profile_text: str = ""  # 用户画像自由描述（开放式，judge 语义匹配用）
+    profile_note: str = ""  # 用户画像说明（可选，数据文件里的 user_profile.note，保留用）
+
+    def to_dict(self) -> dict:
+        fact_db = {name: f.to_dict() for name, f in self.fact_db.items()}
+        user_profile = {}
+        if self.profile:
+            user_profile["tags"] = self.profile
+        if self.profile_text:
+            user_profile["description"] = self.profile_text
+        if self.profile_note:
+            user_profile["note"] = self.profile_note
+        d = {}
+        if fact_db:
+            d["fact_db"] = fact_db
+        if user_profile:
+            d["user_profile"] = user_profile
+        return d
 
 
 @dataclass
@@ -64,6 +99,11 @@ class HotelFact:
     score: float
     facilities: List[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        d = _to_dict(self)
+        d.pop("name", None)  # name 是 fact_db 的 map key，不重复写入字段
+        return d
+
 
 @dataclass
 class Claim:
@@ -73,6 +113,9 @@ class Claim:
     attribute: str  # price / score / facility / region / star ...
     value: Any
     source: str = ""  # 出自输出哪一段，便于定位
+
+    def to_dict(self) -> dict:
+        return _to_dict(self)
 
 
 @dataclass
@@ -85,6 +128,9 @@ class RecommendedHotel:
     level_text: str = ""  # 档次文本，如 "经济型"
     price_text: str = ""  # 价格文本，如 "¥202起"
     reasons: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return _to_dict(self)
 
 
 @dataclass

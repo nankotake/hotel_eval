@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 临时 / 日志
+*.log
+
+# 运行时数据（含密钥 / 会增长，不入库）
+hotel_eval/data/config.json
+hotel_eval/data/eval_records.json
+hotel_eval/data/eval_sets.json
